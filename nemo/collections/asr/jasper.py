@@ -222,9 +222,6 @@ class JasperEncoder(TrainableNM):
         if length is None:
             return s_input[-1]
 
-        # TODO: Delete.
-        assert torch.equal(length, length)
-
         return s_input[-1], length
 
 
