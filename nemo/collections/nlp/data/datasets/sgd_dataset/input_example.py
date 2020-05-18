@@ -66,6 +66,11 @@ class InputExample(object):
 
         self.user_utterance = ''
         self.system_utterance = ''
+
+        # # sestem and user actions CLS act-slot_name-slot_value SEP act-slot_name-slot_value SEP
+        # self.user_actions = None
+        # self.system_actions = None
+        
         # The id of each subword in the vocabulary for BERT.
         self.utterance_ids = [0] * self._max_seq_length
         # Denotes the identity of the sequence. Takes values 0 (system utterance) and 1 (user utterance).
@@ -121,7 +126,7 @@ class InputExample(object):
     def readable_summary(self):
         """Get a readable dict that summarizes the attributes of an InputExample."""
         seq_length = sum(self.utterance_mask)
-        utt_toks = self._tokenizer.convert_ids_to_tokens(self.utterance_ids[:seq_length])
+        utt_toks = self._tokenizer.ids_to_tokens(self.utterance_ids[:seq_length])
         utt_tok_mask_pairs = list(zip(utt_toks, self.utterance_segment[:seq_length]))
         active_intents = [
             self.service_schema.get_intent_from_id(idx)
@@ -254,9 +259,6 @@ class InputExample(object):
         self.start_char_idx = start_char_idx
         self.end_char_idx = end_char_idx
 
-        self.user_utterances = user_utterance
-        self.system_utterance = system_utterance
-
     def make_copy_with_utterance_features(self):
         """Make a copy of the current example with utterance features."""
         new_example = InputExample(
@@ -342,6 +344,74 @@ class InputExample(object):
                 self.intent_status[intent_idx] = STATUS_ACTIVE
                 # adding +1 to take none intent into account
                 self.intent_status_labels = intent_idx + 1
+
+    def add_actions(self, system_actions_labels, user_actions):
+        """
+        Add features for system and user actions.
+        system_actions: [{'act': 'REQUEST', 'canonical_values': [], 'slot': 'city', 'values': []}]
+        """
+        # actions processed format: [CLS] ACT1-SLOT1-SLOT_VALUES1 [SEP] ACT2-SLOT2-SLOT_VALUES2 [SEP]
+        user_actions = [act['act'] + '-' + act['slot']  + '-' + '--'.join(act['canonical_values']) for act in user_actions]
+        system_actions_labels = [act['act'] + '-' + act['slot']  + '-' + '--'.join(act['canonical_values']) for act in system_actions_labels]
+
+        system_acts_subwords = [self._tokenizer.sep_token.join(system_acts) for system_acts in system_actions_labels]
+        user_acts_subwords = [self._tokenizer.sep_token.join(user_acts) for user_acts in user_actions]
+
+        # Make user-system actions input (in BERT format)
+        # Input sequence length for utterance BERT encoder
+        max_len = self._max_seq_length
+
+        all_user_acts_subwords = [self._tokenizer.cls_token]
+        all_system_acts_subwords = [self._tokenizer.cls_token]
+        user_seg = [0]
+        user_mask = [1]
+        system_seg =  [0]
+        system_mask = [1]
+
+        for user_subwords in user_acts_subwords:
+            all_user_acts_subwords.extend(user_subwords + [self._tokenizer.sep_token])
+            user_seg.append(0)
+            user_mask.append(1)
+
+        for sys_subwords in system_acts_subwords:
+            all_system_acts_subwords.extend(sys_subwords + [self._tokenizer.sep_token])
+            system_seg.append(0)
+            system_mask.append(1)
+
+        # Modify lengths of sys & usr actions so that length of total action
+        # (including cls_token, sep_tokens) is no more than max_utt_len
+        if len(all_user_acts_subwords) > max_len:
+            logging.info(f'User actions for {self.example_id} is too long.')
+            all_user_acts_subwords = all_user_acts_subwords[:max_len]
+            user_seg = user_seg[:max_len]
+            user_mask = user_mask[:max_len]
+
+        if len(all_system_acts_subwords) > max_len:
+            logging.info(f'System actions for {self.example_id} is too long.')
+            all_system_acts_subwords = all_system_acts_subwords[:max_len]
+            system_seg = system_seg[:max_len]
+            system_mask = system_mask[:max_len]
+
+        system_acts_ids = self._tokenizer.tokens_to_ids(all_system_acts_subwords)
+        user_acts_ids = self._tokenizer.tokens_to_ids(all_user_acts_subwords)
+
+        # Zero-pad up to the BERT input sequence length.
+        while len(system_acts_ids) < max_len:
+            system_acts_ids.append(0)
+            system_seg.append(0)
+            system_mask.append(0)
+
+        while len(user_acts_ids) < max_len:
+            user_acts_ids.append(0)
+            user_seg.append(0)
+            user_mask.append(0)
+
+        self.system_acts_ids = system_acts_ids
+        self.system_seg = system_seg
+        self.system_mask = system_mask
+        self.user_acts_ids = user_acts_ids
+        self.user_seg = user_seg
+        self.user_mask = user_mask
 
 
 # Modified from run_classifier._truncate_seq_pair in the public bert model repo.
