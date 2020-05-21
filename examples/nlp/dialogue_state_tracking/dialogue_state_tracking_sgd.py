@@ -19,20 +19,19 @@ import argparse
 import math
 import os
 
-import nemo
 import nemo.collections.nlp as nemo_nlp
 import nemo.collections.nlp.data.datasets.sgd_dataset.data_processor as data_processor
-from nemo import logging
 from nemo.collections.nlp.callbacks.sgd_callback import eval_epochs_done_callback, eval_iter_callback
 from nemo.collections.nlp.data.datasets.sgd_dataset.schema_processor import SchemaPreprocessor
 from nemo.collections.nlp.nm.trainables import sgd_model, sgd_modules
+from nemo.core import Backend, CheckpointCallback, EvaluatorCallback, NeuralModuleFactory, SimpleLossLoggerCallback
+from nemo.utils import logging
 from nemo.utils.lr_policies import get_lr_policy
 
 # Parsing arguments
 parser = argparse.ArgumentParser(description='Schema_guided_dst')
 
 # BERT based utterance encoder related arguments
-
 parser.add_argument(
     "--max_seq_length",
     default=80,
@@ -47,7 +46,7 @@ parser.add_argument(
     default="bert-base-cased",
     type=str,
     help="Name of the pre-trained model",
-    choices=nemo_nlp.nm.trainables.get_bert_models_list(),
+    choices=nemo_nlp.nm.trainables.get_pretrained_lm_models_list(),
 )
 parser.add_argument("--bert_checkpoint", default=None, type=str, help="Path to model checkpoint")
 parser.add_argument("--bert_config", default=None, type=str, help="Path to bert config file in json format")
@@ -63,6 +62,13 @@ parser.add_argument(
     type=str,
     choices=["nemobert", "sentencepiece"],
     help="tokenizer to use, only relevant when using custom pretrained checkpoint.",
+)
+parser.add_argument("--vocab_file", default=None, help="Path to the vocab file.")
+parser.add_argument(
+    "--do_lower_case",
+    action='store_true',
+    help="Whether to lower case the input text. True for uncased models, False for cased models. "
+    + "Only applicable when tokenizer is build with vocab file",
 )
 
 # Hyperparameters and optimization related flags.
@@ -165,6 +171,13 @@ parser.add_argument(
 )
 
 parser.add_argument(
+    "--loss_reduction",
+    default='mean',
+    type=str,
+    help="specifies the reduction to apply to the final loss, choose 'mean' or 'sum'",
+)
+
+parser.add_argument(
     "--eval_epoch_freq", default=1, type=int, help="Frequency of evaluation",
 )
 
@@ -190,7 +203,7 @@ parser.add_argument(
     "--schema_emb_init",
     type=str,
     default='baseline',
-    choices=['baseline', 'random', 'last_layer_average', 'last_4_layers_average'],
+    choices=['baseline', 'random', 'last_layer_average'],
     help="Specifies how schema embeddings are generated. Baseline uses ['CLS'] token",
 )
 parser.add_argument(
@@ -226,10 +239,10 @@ else:
     }
 
 if not os.path.exists(args.data_dir):
-    raise ValueError('Data not found at {args.data_dir}')
+    raise ValueError(f'Data not found at {args.data_dir}')
 
-nf = nemo.core.NeuralModuleFactory(
-    backend=nemo.core.Backend.PyTorch,
+nf = NeuralModuleFactory(
+    backend=Backend.PyTorch,
     local_rank=args.local_rank,
     optimization_level=args.amp_opt_level,
     log_dir=args.work_dir,
@@ -239,21 +252,22 @@ nf = nemo.core.NeuralModuleFactory(
     add_time_to_log_dir=not args.no_time_to_log_dir,
 )
 
-pretrained_bert_model = nemo_nlp.nm.trainables.get_huggingface_model(
-    bert_config=args.bert_config, pretrained_model_name=args.pretrained_model_name
+pretrained_bert_model = nemo_nlp.nm.trainables.get_pretrained_lm_model(
+    pretrained_model_name=args.pretrained_model_name,
+    config=args.bert_config,
+    vocab=args.vocab_file,
+    checkpoint=args.bert_checkpoint,
 )
 
 schema_config["EMBEDDING_DIMENSION"] = pretrained_bert_model.hidden_size
 schema_config["MAX_SEQ_LENGTH"] = args.max_seq_length
 
-if args.bert_checkpoint is not None:
-    pretrained_bert_model.restore_from(args.bert_checkpoint)
-    logging.info(f"model restored from {args.bert_checkpoint}")
-
-tokenizer = nemo.collections.nlp.data.tokenizers.get_tokenizer(
+tokenizer = nemo_nlp.data.tokenizers.get_tokenizer(
     tokenizer_name=args.tokenizer,
     pretrained_model_name=args.pretrained_model_name,
     tokenizer_model=args.tokenizer_model,
+    vocab_file=args.vocab_file,
+    do_lower_case=args.do_lower_case,
 )
 
 hidden_size = pretrained_bert_model.hidden_size
@@ -284,8 +298,7 @@ dialogues_processor = data_processor.Dstc8DataProcessor(
 # define model pipeline
 encoder = sgd_modules.EncoderNM(hidden_size=hidden_size, dropout=args.dropout)
 model = sgd_model.SGDModel(embedding_dim=hidden_size, schema_emb_processor=schema_preprocessor)
-
-dst_loss = nemo_nlp.nm.losses.SGDDialogueStateLossNM()
+dst_loss = nemo_nlp.nm.losses.SGDDialogueStateLossNM(reduction=args.loss_reduction)
 
 
 def create_pipeline(dataset_split='train'):
@@ -297,7 +310,6 @@ def create_pipeline(dataset_split='train'):
         num_workers=args.num_workers,
         pin_memory=args.enable_pin_memory,
     )
-
     data = datalayer()
 
     # Encode the utterances using BERT.
@@ -381,7 +393,7 @@ logging.info(f'Steps per epoch: {steps_per_epoch}')
 _, eval_tensors = create_pipeline(dataset_split=args.eval_dataset)
 
 # Create trainer and execute training action
-train_callback = nemo.core.SimpleLossLoggerCallback(
+train_callback = SimpleLossLoggerCallback(
     tensors=train_tensors,
     print_func=lambda x: logging.info("Loss: {:.8f}".format(x[0].item())),
     get_tb_values=lambda x: [["loss", x[0]]],
@@ -394,7 +406,6 @@ input_json_files = [
     os.path.join(args.data_dir, args.eval_dataset, 'dialogues_{:03d}.json'.format(fid))
     for fid in data_processor.FILE_RANGES[args.task_name][args.eval_dataset]
 ]
-
 schema_json_file = os.path.join(args.data_dir, args.eval_dataset, 'schema.json')
 
 # Write predictions to file in DSTC8 format.
@@ -402,7 +413,7 @@ prediction_dir = os.path.join(nf.work_dir, 'predictions', 'pred_res_{}_{}'.forma
 output_metric_file = os.path.join(nf.work_dir, 'metrics.txt')
 os.makedirs(prediction_dir, exist_ok=True)
 
-eval_callback = nemo.core.EvaluatorCallback(
+eval_callback = EvaluatorCallback(
     eval_tensors=eval_tensors,
     user_iter_callback=lambda x, y: eval_iter_callback(x, y, schema_preprocessor, args.eval_dataset),
     user_epochs_done_callback=lambda x: eval_epochs_done_callback(
@@ -422,7 +433,7 @@ eval_callback = nemo.core.EvaluatorCallback(
     eval_step=args.eval_epoch_freq * steps_per_epoch,
 )
 
-ckpt_callback = nemo.core.CheckpointCallback(
+ckpt_callback = CheckpointCallback(
     folder=nf.checkpoint_dir, epoch_freq=args.save_epoch_freq, step_freq=args.save_step_freq, checkpoints_to_keep=1
 )
 

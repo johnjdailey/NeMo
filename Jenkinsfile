@@ -184,11 +184,29 @@ pipeline {
             sh 'rm -rf examples/nlp/token_classification/token_classification_output'
           }
         }
+        stage('Megatron finetuning Token Classification Training/Inference Test') {
+          steps {
+            sh 'cd examples/nlp/token_classification && CUDA_VISIBLE_DEVICES=0 python token_classification.py --data_dir /home/TestData/nlp/token_classification_punctuation/ --batch_size 2 --num_epochs 1 --save_epoch_freq 1 --work_dir megatron_output --pretrained_model_name megatron-bert-345m-uncased'
+            sh 'cd examples/nlp/token_classification && DATE_F=$(ls megatron_output/) && CUDA_VISIBLE_DEVICES=0 python token_classification_infer.py --checkpoint_dir megatron_output/$DATE_F/checkpoints/ --labels_dict /home/TestData/nlp/token_classification_punctuation/label_ids.csv --pretrained_model_name megatron-bert-345m-uncased'
+            sh 'rm -rf examples/nlp/token_classification/megatron_output'
+          }
+        }
         stage ('Punctuation and Classification Training/Inference Test') {
           steps {
-            sh 'cd examples/nlp/token_classification && CUDA_VISIBLE_DEVICES=1 python punctuation_capitalization.py --data_dir /home/TestData/nlp/token_classification_punctuation/ --work_dir punctuation_output --save_epoch_freq 1 --num_epochs 1 --save_step_freq -1 --batch_size 2'
+            sh 'cd examples/nlp/token_classification && CUDA_VISIBLE_DEVICES=1 python punctuation_capitalization.py \
+            --data_dir /home/TestData/nlp/token_classification_punctuation/ --work_dir punctuation_output --save_epoch_freq 1 \
+            --num_epochs 1 --save_step_freq -1 --batch_size 2'
             sh 'cd examples/nlp/token_classification && DATE_F=$(ls punctuation_output/) && DATA_DIR="/home/TestData/nlp/token_classification_punctuation" && CUDA_VISIBLE_DEVICES=1 python punctuation_capitalization_infer.py --checkpoint_dir punctuation_output/$DATE_F/checkpoints/ --punct_labels_dict $DATA_DIR/punct_label_ids.csv --capit_labels_dict $DATA_DIR/capit_label_ids.csv'
             sh 'rm -rf examples/nlp/token_classification/punctuation_output'
+          }
+        }
+        stage('SGD Test') {
+          steps {
+            sh 'cd examples/nlp/dialogue_state_tracking && CUDA_VISIBLE_DEVICES=0 python dialogue_state_tracking_sgd.py \
+            --data_dir /home/TestData/nlp/sgd/ --schema_embedding_dir /home/TestData/nlp/sgd/embeddings/ --eval_dataset dev \
+            --dialogues_example_dir /home/TestData/nlp/sgd/dialogue_example_dir/ --work_dir sgd_output --task DEBUG \
+            --num_epochs 1 --save_epoch_freq=0'
+            sh 'rm -rf examples/nlp/dialogue_state_tracking/sgd_output'
           }
         }
       }
