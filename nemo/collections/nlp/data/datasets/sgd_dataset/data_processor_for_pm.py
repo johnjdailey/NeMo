@@ -126,9 +126,6 @@ class Dstc8DataProcessor(object):
         Returns:
           examples: a list of `InputExample`s.
         """
-        if self.mode == 'PM':
-            return self.get_data_for_pm()
-        
         if (self._task_name, dataset) not in self.dial_files or not os.path.exists(
             self.dial_files[(self._task_name, dataset)]
         ):
@@ -285,8 +282,25 @@ class Dstc8DataProcessor(object):
             user_actions = user_frame['actions']
             system_frame_next = system_frames_next[service]
             system_actions_labels = system_frame_next['actions']
-            example.add_actions(user_actions, system_actions_labels)
+            # system_actions format: [{'act': 'REQUEST', 'canonical_values': [], 'slot': 'city', 'values': []}]
+            # actions processed format: [[ACT1 SLOT1 SLOT_VALUES1], [ACT2 SLOT2 SLOT_VALUES2]]
+            user_actions = [(act['act'] + ' ' + act['slot']  + ' ' + ' '.join(act['canonical_values'])).lower().strip() for act in user_actions]
+            # system_actions_labels = [(act['act'] + ' ' + act['slot']  + ' ' + ' '.join(act['canonical_values'])).lower().strip() for act in system_actions_labels]
+            # system_acts_subwords = [self._tokenize(system_acts)[0] for system_acts in system_actions_labels]
 
+            system_acts_dict = {'INFORM REQUEST':0, 'CONFIRM':1, 'OFFER':2, 'NOTIFY_SUCCESS':3,
+                                'NOTIFY_FAILURE':4, 'INFORM_COUNT':5, 'OFFER_INTENT':6, 'REQ_MORE':7, 'GOODBYE':8}
+            system_actions_labels = [system_acts_dict[act['act'].strip()] for act in system_actions_labels]
+            user_acts_subwords = [self._tokenize(user_acts)[0] for user_acts in user_actions]
+            
+            
+            
+
+            print(user_acts_subwords)
+            print(system_acts_subwords)
+            
+            example.add_actions(user_acts_subwords, system_acts_subwords)
+            import pdb; pdb.set_trace()
             print ('\nuser uttr:', user_utterance)
             print ('sys uttr:', system_utterance)
             print  ('system act:', system_actions_labels)

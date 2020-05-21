@@ -345,18 +345,11 @@ class InputExample(object):
                 # adding +1 to take none intent into account
                 self.intent_status_labels = intent_idx + 1
 
-    def add_actions(self, system_actions_labels, user_actions):
+    def add_actions(self, user_acts_subwords, system_acts_subwords):
         """
         Add features for system and user actions.
-        system_actions: [{'act': 'REQUEST', 'canonical_values': [], 'slot': 'city', 'values': []}]
+        actions processed format: [[ACT1 SLOT1 SLOT_VALUES1], [ACT2 SLOT2 SLOT_VALUES2]]
         """
-        # actions processed format: [CLS] ACT1-SLOT1-SLOT_VALUES1 [SEP] ACT2-SLOT2-SLOT_VALUES2 [SEP]
-        user_actions = [act['act'] + '-' + act['slot']  + '-' + '--'.join(act['canonical_values']) for act in user_actions]
-        system_actions_labels = [act['act'] + '-' + act['slot']  + '-' + '--'.join(act['canonical_values']) for act in system_actions_labels]
-
-        system_acts_subwords = [self._tokenizer.sep_token.join(system_acts) for system_acts in system_actions_labels]
-        user_acts_subwords = [self._tokenizer.sep_token.join(user_acts) for user_acts in user_actions]
-
         # Make user-system actions input (in BERT format)
         # Input sequence length for utterance BERT encoder
         max_len = self._max_seq_length
@@ -377,7 +370,7 @@ class InputExample(object):
             all_system_acts_subwords.extend(sys_subwords + [self._tokenizer.sep_token])
             system_seg.append(0)
             system_mask.append(1)
-
+ 
         # Modify lengths of sys & usr actions so that length of total action
         # (including cls_token, sep_tokens) is no more than max_utt_len
         if len(all_user_acts_subwords) > max_len:
@@ -405,7 +398,7 @@ class InputExample(object):
             user_acts_ids.append(0)
             user_seg.append(0)
             user_mask.append(0)
-
+        
         self.system_acts_ids = system_acts_ids
         self.system_seg = system_seg
         self.system_mask = system_mask
