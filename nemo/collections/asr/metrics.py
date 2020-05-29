@@ -1,6 +1,7 @@
 # Copyright (c) 2019 NVIDIA Corporation
 from typing import List, Optional
 
+import sklearn
 import torch
 
 
@@ -97,3 +98,26 @@ def classification_accuracy(
             results.append(correct_k)
 
     return results
+
+
+def classification_confusion_matrix(logits: torch.Tensor, targets: torch.Tensor,) -> torch.Tensor:
+    """
+    Computes the confusion matric provided with 
+    un-normalized logits of a model and ground truth targets.
+
+    Args:
+        logits: Un-normalized logits of a model. Softmax will be
+            applied to these logits prior to computation of accuracy.
+        targets: Vector of integers which represent indices of class
+            labels.
+    Returns:
+
+        A tensor (n_classes, n_classes) of confusion matrix.
+    """
+
+    with torch.no_grad():
+        _, predictions = logits.topk(1, dim=1, largest=True, sorted=True)
+        predictions = predictions.t().squeeze()
+        targets = targets.t().squeeze()
+
+    return sklearn.metrics.confusion_matrix(targets, predictions, labels=range(logits.shape[1]))
